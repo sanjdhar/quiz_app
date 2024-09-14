@@ -1,132 +1,94 @@
 import streamlit as st
 from google.cloud import datastore
 import pandas as pd
-import logging
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from google.api_core import exceptions
 
 # Initialize Datastore client
 client = datastore.Client()
-kind = "Test123"
-quiz_id = "quiz123"
 
+def fetch_leaderboard_data():
+    try:
+        query = client.query(kind='Test123')
+        query.order = ['-percentage_score', 'total_time']
+        results = list(query.fetch(limit=100))
 
-def check_datastore_data(kind):
-    query = client.query(kind=kind)
-    results = list(query.fetch(limit=1))
-    if results:
-        logger.info(f"Datastore contains data for kind: {kind}")
-        logger.debug(f"Sample entity: {dict(results[0].items())}")
-    else:
-        logger.warning(f"No data found in Datastore for kind: {kind}")
+        leaderboard_data = []
+        for rank, entity in enumerate(results, start=1):
+            medal = ""
+            if rank == 1:
+                medal = "🥇 "
+            elif rank == 2:
+                medal = "🥈 "
+            elif rank == 3:
+                medal = "🥉 "
+            
+            leaderboard_data.append({
+                'Rank': f"{medal}{rank}",
+                'Nickname': entity['nickname'],
+                'Score': entity['score'],
+                'Percentage': f"{entity['percentage_score']}%",
+                'Time': f"{entity['total_time']:.2f} sec"  # Format time to 2 decimal places
+            })
+        
+        return pd.DataFrame(leaderboard_data)
+    except exceptions.FailedPrecondition as e:
+        st.error(f"An index error occurred: {str(e)}")
+        st.info("Please create the required index in your Datastore. Follow the instructions below:")
+        st.code("""
+1. Create a file named 'index.yaml' with the following content:
 
-# Call this function in your main() before get_leaderboard_data()
-check_datastore_data(kind)
+indexes:
+- kind: Test123
+  properties:
+  - name: percentage_score
+    direction: desc
+  - name: total_time
 
+2. Deploy the index using the following command in your terminal:
+   gcloud datastore indexes create index.yaml
 
-def get_leaderboard_data(kind):
-    logger.info(f"Querying Datastore for kind: {kind}")
-    query = client.query(kind=kind)
-    results = list(query.fetch())
-    logger.info(f"Retrieved {len(results)} entities from Datastore")
-
-    if not results:
-        logger.warning(f"No entities found for kind: {kind}")
+3. Wait for the index to finish building. You can check the status in the Google Cloud Console under Datastore > Indexes.
+        """)
         return pd.DataFrame()
 
-    leaderboard_data = []
-    for entity in results:
-        logger.debug(f"Processing entity: {entity.key.id_or_name}")
-        try:
-            leaderboard_data.append({
-                'nickname': str(entity.get('nickname', 'Unknown')),
-                'percentage_score': int(entity.get('percentage_score', 0)),
-                'total_time': float(entity.get('total_time', 0)),
-                'quiz_id': str(entity.get('quiz_id', 'Unknown'))
-            })
-        except Exception as e:
-            logger.error(f"Error processing entity: {entity.key.id_or_name}. Error: {str(e)}")
-            logger.debug(f"Raw entity data: {dict(entity.items())}")
-
-    df = pd.DataFrame(leaderboard_data)
-    logger.info(f"Created DataFrame with {len(df)} rows")
-
-    if df.empty:
-        logger.warning("DataFrame is empty after processing entities")
-        return df
-
-    # ... (rest of the function remains the same)
-
-    # Query the datastore
-    query = client.query(kind=kind)
-    results = list(query.fetch())
-    
-    # Process the data
-    leaderboard_data = []
-    for entity in results:
-        try:
-            leaderboard_data.append({
-                'nickname': str(entity.get('nickname', 'Unknown')),
-                'percentage_score': int(entity.get('percentage_score', 0)),
-                'total_time': float(entity.get('total_time', 0)),
-                'quiz_id': str(entity.get('quiz_id', 'Unknown'))
-            })
-        except Exception as e:
-            logger.error(f"Error processing entity: {entity.key.id_or_name}. Error: {str(e)}")
-            logger.debug(f"Raw entity data: {dict(entity.items())}")
-    
-    # Convert to DataFrame and sort
-    df = pd.DataFrame(leaderboard_data)
-    if df.empty:
-        logger.warning("No data retrieved from Datastore")
-        return df
-
-    # Check if required columns exist
-    required_columns = ['percentage_score', 'total_time']
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    if missing_columns:
-        logger.error(f"Missing required columns: {missing_columns}")
-        return pd.DataFrame()  # Return empty DataFrame if required columns are missing
-
-    df = df.sort_values(by=['percentage_score', 'total_time'], ascending=[False, True])
-    
-    # Add rank column
-    df['rank'] = df['percentage_score'].rank(method='min', ascending=False)
-    
-    return df
-
 def main():
-    st.title("Quiz Leaderboard")
+    st.title("🏆 Quiz Leaderboard 🏆")
 
-    # Sidebar for filtering
-    st.sidebar.header("Filters")
-    kind = st.sidebar.text_input("Entity Kind", "QuizResult")
-    top_n = st.sidebar.number_input("Show Top N", min_value=1, value=10)
-
-    # Get and display leaderboard
-    leaderboard = get_leaderboard_data(kind)
+    leaderboard_df = fetch_leaderboard_data()
     
-    if leaderboard.empty:
-        st.warning("No data available for the leaderboard.")
-        return
+    if not leaderboard_df.empty:
+        # Apply custom styling
+        st.markdown("""
+        <style>
+        table {
+            font-size: 20px;
+        }
+        th {
+            background-color: #4CAF50;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        tr:hover {
+            background-color: #ddd;
+        }
+        </style>
+        """, unsafe_allow_html=True)
 
-    st.subheader(f"Top {top_n} Players")
-    st.table(leaderboard.head(top_n).style.format({
-        'percentage_score': '{:.0f}%',  # Changed to integer format
-        'total_time': '{:.2f} sec',
-        'rank': '{:.0f}'
-    }))
+        # Display the table
+        st.table(leaderboard_df)
 
-    # Display full leaderboard
-    st.subheader("Full Leaderboard")
-    st.dataframe(leaderboard.style.format({
-        'percentage_score': '{:.0f}%',  # Changed to integer format
-        'total_time': '{:.2f} sec',
-        'rank': '{:.0f}'
-    }))
+        # Display congratulatory message for top 3
+        top_3 = leaderboard_df.head(3)
+        st.success("🎉 Congratulations to our top performers! 🎉")
+        for i, (index, row) in enumerate(top_3.iterrows(), 1):
+            st.markdown(f"**{i}. {row['Nickname']}** - Score: {row['Score']}, Time: {row['Time']}")
+    else:
+        st.write("No quiz results available or an index error occurred.")
+
+    if st.button("🔄 Refresh Leaderboard"):
+        st.rerun()
 
 if __name__ == "__main__":
-    check_datastore_data(kind)
     main()

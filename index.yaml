@@ -1,0 +1,6 @@
+indexes:
+- kind: Test123
+  properties:
+  - name: percentage_score
+    direction: desc
+  - name: total_time
